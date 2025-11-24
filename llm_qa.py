@@ -1,5 +1,4 @@
 from langchain_huggingface import HuggingFacePipeline
-from langchain_community.llms import HuggingFacePipeline
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import torch
 
@@ -23,16 +22,11 @@ class LLMQA:
                 temperature=0.7
             )
             self.llm = HuggingFacePipeline(pipeline=pipe)
-        
-            self.prompt_template = """Based on the following context, answer the question. If the answer is not in the context, say "I cannot find this information in the document."
 
-Context:
-{context}
+            # Prompt: prefer document-grounded answers, but allow general
+            # knowledge when the context does not contain the information.
+            self.prompt_template = """You are a helpful assistant answering questions about a specific document.\n\nUse the provided context from the document as your primary source.\nIf the context is not sufficient to answer the question, you may answer\nfrom your general knowledge, but clearly start your answer with:\n\n"Note: This information is not in the document; answering from general knowledge."\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"""
 
-Question: {question}
-
-Answer:"""
-            
             print(f"LangChain LLM loaded on {device_name}")
             
         except Exception as e:
