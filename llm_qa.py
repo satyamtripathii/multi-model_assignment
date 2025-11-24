@@ -1,12 +1,27 @@
 from langchain_huggingface import HuggingFacePipeline
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import torch
+import re
 
 FALLBACK_MESSAGE = (
     "This question may not be covered in the document. "
     "Try asking something related to economic outlook, fiscal policy, "
     "monetary policy, or NDS3 reforms."
 )
+
+# Keywords used when doing fuzzy relevance checks between question and chunks
+ECON_RELATED_KEYWORDS = [
+    "gdp",
+    "growth",
+    "forecast",
+    "projection",
+    "projected",
+    "economic outlook",
+    "outlook",
+    "imf",
+]
+
+YEAR_KEYWORDS = ["2024", "2025"]
 
 
 class LLMQA:
@@ -68,46 +83,121 @@ class LLMQA:
             pieces.append(f"[Source: {src} | Page: {page}]\n{content}")
         return "\n\n".join(pieces)
 
-    def _is_chunk_relevant(self, query: str, chunk: dict) -> bool:
+    def _keyword_match_score(self, query: str, chunk_text: str):
+        """Return a fuzzy keyword-overlap score in [0, 1] plus keyword flags.
+
+        This is purely lexical and is used to avoid false negatives when the
+        embedding model or LLM underestimates relevance.
         """
-        LLM-based self-validation of individual chunks.
-        Asks: 'Does this chunk directly answer the users question? Reply YES or NO.'
+        query_lower = (query or "").lower()
+        text_lower = (chunk_text or "").lower()
+
+        q_tokens = [t for t in re.split(r"\W+", query_lower) if t]
+        t_tokens = [t for t in re.split(r"\W+", text_lower) if t]
+
+        q_set = set(q_tokens)
+        t_set = set(t_tokens)
+        overlap = q_set.intersection(t_set)
+
+        has_query_keywords = len(overlap) > 0
+
+        # Base lexical overlap score (Jaccard-like)
+        denom = max(len(q_set), 1)
+        base_score = len(overlap) / denom
+
+        # Strong economic terms: GDP, growth, IMF projections, outlook, years
+        econ_hit_in_chunk = any(kw in text_lower for kw in ECON_RELATED_KEYWORDS)
+        econ_hit_in_query = any(kw in query_lower for kw in ECON_RELATED_KEYWORDS)
+        year_hit_in_query = any(y in query_lower for y in YEAR_KEYWORDS)
+        year_hit_in_chunk = any(y in text_lower for y in YEAR_KEYWORDS)
+
+        has_econ_or_year_hit = (econ_hit_in_chunk and econ_hit_in_query) or (
+            year_hit_in_query and year_hit_in_chunk
+        )
+
+        # If both question and chunk mention key econ terms / years, treat this
+        # as at least "PARTIAL" relevance even when lexical overlap is small.
+        if has_econ_or_year_hit:
+            base_score = max(base_score, 0.5)
+
+        base_score = float(max(0.0, min(1.0, base_score)))
+        return base_score, has_query_keywords, has_econ_or_year_hit
+
+    def _llm_relevance_label(self, query: str, chunk: dict):
+        """Ask the LLM for a soft relevance label: YES / PARTIAL / NO.
+
+        Returns (label_str, score) where score is in {1.0, 0.5, 0.0}.
         """
         content = chunk.get("content", "")[:500]
         prompt = (
-            "You are checking whether a document chunk directly answers a user's question.\n\n"
+            "You are checking whether a document chunk answers a user's question.\n\n"
             f"Question:\n{query}\n\n"
             f"Chunk:\n{content}\n\n"
-            "Does this chunk directly answer the user's question? "
-            "Reply with a single word: YES or NO."
+            "Does this chunk help answer the user's question? "
+            "Reply with exactly one word: YES, PARTIAL, or NO."
         )
         try:
             response = self.llm.invoke(prompt).strip().upper()
         except Exception as e:
             print(f"Error during chunk relevance check: {e}")
-            # If validation fails, err on the side of keeping the chunk
-            return True
+            # If validation fails, fall back to neutral PARTIAL
+            return "PARTIAL", 0.5
 
-        return response.startswith("YES")
+        if response.startswith("YES"):
+            return "YES", 1.0
+        if response.startswith("PART"):
+            return "PARTIAL", 0.5
+        if response.startswith("NO"):
+            return "NO", 0.0
+
+        # Unknown label -> treat as partial match
+        return "PARTIAL", 0.5
+
+    def _get_chunk_relevance_score(self, query: str, chunk: dict):
+        """Combine LLM label and keyword overlap into a soft confidence score.
+
+        The final score is max(llm_score, keyword_score) so that strong
+        keyword matches are never discarded even if the LLM is conservative.
+        """
+        keyword_score, has_query_keywords, has_econ_or_year_hit = self._keyword_match_score(
+            query, chunk.get("content", "")
+        )
+        label, llm_score = self._llm_relevance_label(query, chunk)
+
+        final_score = max(llm_score, keyword_score)
+        return final_score, {
+            "label": label,
+            "llm_score": llm_score,
+            "keyword_score": keyword_score,
+            "has_query_keywords": has_query_keywords,
+            "has_econ_or_year_hit": has_econ_or_year_hit,
+        }
 
     def _filter_relevant_results(self, query: str, search_results, max_to_check: int = 5):
-        """
-        Run LLM-based self-validation over top-k retrieved chunks.
-        Returns (filtered_results, relevance_flags_for_checked).
+        """Score top-k retrieved chunks and keep those above a soft threshold.
+
+        Returns:
+            filtered_results: list of results with score >= 0.5 (YES or PARTIAL)
+            scores: list of float scores for the inspected results
+            any_keyword_hit: True if any inspected chunk matched econ/query keywords
         """
         if not search_results:
-            return [], []
+            return [], [], False
 
-        filtered = []
-        relevance_flags = []
+        scored_results = []
+        scores = []
+        any_keyword_hit = False
 
         for i, result in enumerate(search_results[:max_to_check]):
-            is_rel = self._is_chunk_relevant(query, result["chunk"])
-            relevance_flags.append(is_rel)
-            if is_rel:
-                filtered.append(result)
+            score, meta = self._get_chunk_relevance_score(query, result["chunk"])
+            scored_results.append((result, score, meta))
+            scores.append(score)
+            if meta.get("has_query_keywords") or meta.get("has_econ_or_year_hit"):
+                any_keyword_hit = True
 
-        return filtered, relevance_flags
+        filtered_results = [res for (res, score, _meta) in scored_results if score >= 0.5]
+
+        return filtered_results, scores, any_keyword_hit
 
     def _is_answer_grounded(self, context_text: str, answer: str) -> bool:
         """
@@ -157,18 +247,19 @@ class LLMQA:
         if not answer.strip():
             return "No evidence found in the document."
 
-        # LLM-based post-hoc validation for grounding
-        if not self._is_answer_grounded(context_text, answer):
-            return "No evidence found in the document."
-
+        # Grounding is now enforced softly in generate_answer_with_citations,
+        # where we may add a safety note instead of blocking the answer.
         return answer
 
     def generate_answer_with_citations(self, query, search_results):
-        """
-        1) Self-validate top 5 chunks using LLM (YES/NO).
-        2) If top 3 are all irrelevant -> fallback message.
-        3) Use only validated chunks as context for answering.
-        4) Validate final answer is grounded in context.
+        """Generate an answer plus citations using soft validation.
+
+        Changes vs. the strict version:
+        - Chunks are scored (0.0–1.0) instead of YES/NO.
+        - Fallback is only triggered when the top 3 chunks all have confidence
+          < 0.2 *and* no chunk matches econ/query keywords.
+        - Otherwise we always answer using the best chunks and, if needed,
+          append a safety note when confidence is low or grounding is weak.
         """
         if not search_results:
             return {
@@ -177,26 +268,54 @@ class LLMQA:
                 "context_used": 0,
             }
 
-        # Step 1: self-validate top 5 chunks
-        filtered_results, relevance_flags = self._filter_relevant_results(
+        # Step 1: score and filter the top retrieved chunks
+        filtered_results, relevance_scores, any_keyword_hit = self._filter_relevant_results(
             query, search_results, max_to_check=5
         )
 
-        # Step 2: fallback rule if top 3 chunks are irrelevant
-        top3_flags = relevance_flags[:3]
-        if top3_flags and not any(top3_flags):
+        top3_scores = relevance_scores[:3]
+        low_confidence_top3 = bool(top3_scores) and all(s < 0.2 for s in top3_scores)
+
+        # Step 2: conservative fallback only when nothing looks relevant
+        if low_confidence_top3 and not any_keyword_hit:
             return {
                 "answer": FALLBACK_MESSAGE,
                 "citations": [],
                 "context_used": 0,
             }
 
-        # If nothing passed validation, still use top-k as weak context
+        # If nothing passed the 0.5 threshold, still use top-k as weak context
         if not filtered_results:
-            filtered_results = search_results[:5]
+            filtered_results = search_results[:3]
 
         context_chunks = [res["chunk"] for res in filtered_results]
+        context_text = self._build_context_text(context_chunks)
         answer = self.generate_answer(query, context_chunks)
+
+        # Soft confidence measure from validation scores
+        avg_conf = (
+            sum(relevance_scores) / len(relevance_scores)
+            if relevance_scores
+            else 1.0
+        )
+
+        safety_note = ""
+        if avg_conf < 0.4:
+            safety_note = (
+                "\n\n_NOTE: The document evidence for this question is limited or "
+                "partially relevant, so the answer may be incomplete._"
+            )
+
+        # Optional grounding check. If grounding is weak, we do NOT block the
+        # answer; we just append a safety disclaimer.
+        if not self._is_answer_grounded(context_text, answer):
+            if not safety_note:
+                safety_note = (
+                    "\n\n_NOTE: This answer may not be fully supported by the "
+                    "retrieved context and should be interpreted with caution._"
+                )
+
+        final_answer = answer + safety_note if safety_note else answer
 
         citations = []
         for i, result in enumerate(filtered_results[:3]):
@@ -212,9 +331,10 @@ class LLMQA:
             )
 
         return {
-            "answer": answer,
+            "answer": final_answer,
             "citations": citations,
             "context_used": len(context_chunks),
+            "confidence": float(avg_conf),
         }
 
 

@@ -13,15 +13,47 @@ except ImportError:
 
 # Keywords used to adjust scoring when questions are about macro / policy topics
 ECON_KEYWORDS = [
-    "growth", "gdp", "inflation", "fiscal", "monetary", "policy",
-    "projection", "forecast", "outlook", "risks", "recommendations"
+    "growth",
+    "gdp",
+    "inflation",
+    "fiscal",
+    "monetary",
+    "policy",
+    "projection",
+    "forecast",
+    "projected",
+    "outlook",
+    "economic outlook",
+    "risks",
+    "recommendations",
+    "imf",
+    "real gdp",
+    "real gdp growth",
+    "2024",
+    "2025",
 ]
 
 # Keywords that strongly suggest the user is asking for numeric / tabular data
 NUMERIC_HINT_KEYWORDS = [
-    "table", "tables", "statistics", "stats", "data", "dataset",
-    "numeric", "numerical", "numbers", "figures", "values", "gdp table",
-    "inflation table", "projection table"
+    "table",
+    "tables",
+    "statistics",
+    "stats",
+    "data",
+    "dataset",
+    "numeric",
+    "numerical",
+    "numbers",
+    "figures",
+    "values",
+    "gdp table",
+    "inflation table",
+    "projection table",
+    "forecast table",
+    "projection",
+    "forecast",
+    "2024",
+    "2025",
 ]
 
 
@@ -155,9 +187,21 @@ class VectorStore:
         if not is_numeric:
             is_numeric = any(token.isdigit() for token in re.split(r"\W+", q_lower))
 
+        forecast_terms = [
+            "growth",
+            "gdp",
+            "forecast",
+            "projection",
+            "projected",
+            "2024",
+            "2025",
+        ]
+        has_forecast_keywords = any(kw in q_lower for kw in forecast_terms)
+
         return {
             "contains_econ_keywords": contains_econ,
             "is_numeric_question": is_numeric,
+            "has_forecast_keywords": has_forecast_keywords,
         }
 
     @staticmethod
@@ -165,18 +209,30 @@ class VectorStore:
         """
         Apply metadata-based weighting:
         - For macro/policy keywords: boost TEXT, demote TABLE/IMAGE.
+        - For forecast questions with GDP/growth terms: strongly prefer narrative TEXT.
         - For conceptual questions: text > table > image.
-        - For numeric questions: prefer tables.
+        - For numeric questions (without forecast emphasis): prefer tables.
         """
         chunk_type = (chunk_type or "text").lower()
         bias = 0.0
 
-        # 2. Economic-term specific adjustment
-        if query_info.get("contains_econ_keywords"):
+        contains_econ = query_info.get("contains_econ_keywords", False)
+        has_forecast = query_info.get("has_forecast_keywords", False)
+
+        if contains_econ:
             if chunk_type == "text":
                 bias += 0.3
             elif chunk_type in ("table", "image"):
                 bias -= 0.3
+
+        # For forecast-style economic questions, always prioritise narrative text
+        if has_forecast:
+            if chunk_type == "text":
+                bias += 0.4
+            elif chunk_type in ("table", "image"):
+                bias -= 0.2
+            # When forecast emphasis is present, skip further numeric/conceptual adjustment
+            return bias
 
         # 3. Conceptual vs numeric weighting
         if query_info.get("is_numeric_question"):
@@ -193,6 +249,44 @@ class VectorStore:
                 bias -= 0.1
 
         return bias
+
+    # -----------------------------
+    # Keyword-based reranking helpers
+    # -----------------------------
+    @staticmethod
+    def _keyword_boost_for_chunk(query: str, chunk: dict) -> float:
+        """Lightweight keyword-based boost on top of vector and BM25 scores.
+
+        - If the chunk contains numeric forecasts or projections -> +0.25
+        - If it contains phrases like 'real GDP growth is projected' -> +0.4
+        """
+        text = (chunk.get("content") or "").lower()
+        q_lower = query.lower()
+        boost = 0.0
+
+        # Numeric forecast / projection with numbers
+        numeric_terms = ["forecast", "projection", "projected", "expected"]
+        has_numeric_term = any(term in text for term in numeric_terms)
+        has_number = any(ch.isdigit() for ch in text)
+        if has_numeric_term and has_number:
+            boost += 0.25
+
+        # Explicit real GDP growth projections
+        if "real gdp growth" in text or (
+            "gdp" in text
+            and "growth" in text
+            and ("projected" in text or "forecast" in text or "projection" in text)
+        ):
+            boost += 0.4
+
+        # Small extra tie-breaker when both query and chunk mention key GDP/forecast terms
+        query_keywords = ["growth", "gdp", "forecast", "projection", "2024", "2025"]
+        if any(kw in q_lower for kw in query_keywords) and any(
+            kw in text for kw in query_keywords
+        ):
+            boost += 0.1
+
+        return boost
 
     # -----------------------------
     # Embedding creation
@@ -306,15 +400,16 @@ class VectorStore:
 
         query_info = self._analyze_query(query)
 
-        # Combine cross-encoder score + type bias
+        # Combine cross-encoder score + type bias + keyword-based boost
         scored = []
         for (cid, _text), ce_score in zip(candidates, ce_scores):
             chunk = self._get_chunk_by_id(cid)
             if not chunk:
                 continue
             chunk_type = chunk.get("type", "text")
-            bias = self._compute_type_bias(chunk_type, query_info)
-            final_score = float(ce_score) + bias
+            type_bias = self._compute_type_bias(chunk_type, query_info)
+            kw_boost = self._keyword_boost_for_chunk(query, chunk)
+            final_score = float(ce_score) + type_bias + kw_boost
             scored.append((final_score, cid))
 
         scored.sort(key=lambda x: x[0], reverse=True)
