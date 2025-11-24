@@ -204,6 +204,8 @@ This quickly checks:
 
 ---
 
+---
+
 ## ☁ Streamlit Cloud Deployment
 
 ### **Steps to Deploy:**
@@ -219,20 +221,14 @@ Main file path: multi-model_assignment/app.py
 ```
 
 4. Click **Deploy** 🎉  
-5. After the build completes, Streamlit will automatically generate a **public hosted URL** that you can use as your hosted link.
+5. After the build finishes, Streamlit will provide a **public hosted URL** you can use as your hosted link.
 
 ---
 
 ## 🧑‍💻 Author
 
 **Satyam Tripathi**  
-B.Tech CSE   
+B.Tech CSE  
 Academic Year: 2022–26
 
 
----
-
-
-
-   - **Main file path:** `multi-model_assignment/app.py`.
-4. Deploy – after the build finishes, Streamlit will provide a public URL you can use as the hosted link.
