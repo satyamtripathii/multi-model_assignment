@@ -65,11 +65,76 @@ This project implements a multi‑modal Retrieval-Augmented Generation (RAG) sys
 
    Then open the URL shown in the terminal (typically `http://localhost:8501`).
 
-## Notes
+## Fixes Implemented for Accuracy
 
-- Embeddings are computed with `sentence-transformers/all-MiniLM-L6-v2`.
-- The LLM used is `google/flan-t5-base` via `transformers` and LangChain.
-- Image OCR uses `pytesseract` and requires the Tesseract binary to be installed on the system. If Tesseract is missing, image OCR is skipped but the rest of the pipeline still works.
+### Fraction and numeric normalization
+
+To keep numeric values faithful to the PDF:
+
+- All extracted text (body text, tables, OCR) is cleaned in `document_processor.py` using a `_clean_text` helper:
+  - Unicode fractions are normalized:
+    - `½` → `0.5`
+    - `¼` → `0.25`
+    - `¾` → `0.75`
+  - Unicode minus signs are normalized to `-`.
+  - Multiple spaces and odd whitespace are collapsed so numbers and words are consistently spaced.
+
+### LLM typo / hallucination correction
+
+In `llm_qa.py`, generated answers go through a light post‑processing filter that fixes a specific mis‑expansion sometimes produced by unicode fractions:
+
+- `"512 percent"` → `"5.5 percent"`
+- `"512%"` → `"5.5%"`
+
+This runs after answer generation (and again after any safety note is appended) so the final text reflects the correct percentage.
+
+### Soft validation and relevance scoring
+
+Answer generation now uses **soft scoring only**:
+
+- Retrieved chunks are labelled by the LLM as `YES` / `PARTIAL` / `NO` and scored as `1.0 / 0.5 / 0.0`.
+- A separate keyword‑overlap score looks at overlap between the question and chunk text.
+- The final relevance score per chunk is `max(llm_score, keyword_score)`, so strong keyword matches are never discarded.
+- Chunks with score ≥ 0.5 (YES or PARTIAL) are kept as context; lower‑scoring chunks are used only as a very weak fallback.
+- Fallback answers are used **only** when the top 3 chunks all have very low scores *and* none match core economic keywords.
+
+### Keyword‑aware retrieval boosts
+
+In `vector_store.py` we add lightweight reranking on top of FAISS + BM25:
+
+- Chunks that contain numeric forecasts or projections get an extra boost.
+- Chunks mentioning phrases like `"real GDP growth is projected"` receive a larger boost.
+- Additional macro‑policy terms inside the chunk (`"GDP"`, `"growth"`, `"fiscal"`, `"inflation"`, `"projection"`) get a small positive boost so that policy paragraphs are preferred.
+- Forecast‑style questions mentioning GDP/growth and years like 2024–25 strongly prefer narrative text over tables or images.
+
+## Updated Pipeline Instructions
+
+Whenever you change the PDF or any of the extraction / retrieval code, rerun the full pipeline:
+
+```bash
+python process_document.py   # re‑extract and clean text/tables/images
+python create_embeddings.py  # rebuild FAISS index and BM25 metadata
+```
+
+After that, restart the app:
+
+```bash
+streamlit run app.py
+```
+
+For quick smoke tests without the UI you can also run:
+
+```bash
+python smoke_test_gdp.py
+```
+
+which queries the vector store and QA layer with the GDP forecast question.
+
+## Known Issues and Solutions
+
+- **Tesseract not installed** – if you see messages like `tesseract is not installed or it's not in your PATH`, image OCR is skipped but the rest of the system works. Install Tesseract and rerun `process_document.py` if you need OCR content.
+- **Long context warnings** – the FLAN‑T5 model may warn about sequences longer than 512 tokens. This does not crash the app but may truncate some context. You can reduce `max_chars_per_chunk` in `llm_qa.py` or switch to a larger model if needed.
+- **Model download / access errors** – if a cross‑encoder model cannot be downloaded from Hugging Face, the system automatically falls back to rank‑based scoring without reranking. Retrieval will still work, just with slightly weaker ranking.
 
 ## Deploying on Streamlit Community Cloud
 

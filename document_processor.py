@@ -3,6 +3,34 @@ from PIL import Image
 import pytesseract
 import io
 import os
+import re
+
+
+def _clean_text(text: str) -> str:
+    """Normalize extracted text for downstream RAG.
+
+    - Normalize unicode fractions to decimal strings so numbers remain faithful.
+    - Collapse multiple whitespace characters into a single space/newline.
+    - Strip trailing spaces on each line.
+    """
+    if not text:
+        return ""
+
+    # Normalize common unicode fractions that appear in IMF PDFs
+    text = text.replace("½", "0.5").replace("¼", "0.25").replace("¾", "0.75")
+
+    # Normalize weird unicode minus or spaces around numbers if any crop up
+    text = text.replace("−", "-")
+
+    # Collapse consecutive spaces but preserve newlines
+    # First normalise spaces inside each line, then rebuild the text.
+    cleaned_lines = []
+    for line in text.split("\n"):
+        # Replace multiple whitespace chars with a single space
+        line = re.sub(r"\s+", " ", line).strip()
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
 
 
 class DocumentProcessor:
@@ -64,6 +92,8 @@ class DocumentProcessor:
             text = page.get_text()
 
             if text and text.strip():
+                # Clean raw page text before chunking to normalise unicode and spaces
+                text = _clean_text(text)
                 raw_chunks = self._chunk_text(text)
                 for idx, chunk_text in enumerate(raw_chunks):
                     section_label = f"page_{page_num + 1}_section_{idx + 1}"
@@ -108,7 +138,7 @@ class DocumentProcessor:
                             tables.append(
                                 {
                                     "type": "table",
-                                    "content": table_text,
+                                    "content": _clean_text(table_text),
                                     "page": page_num + 1,
                                     "section": section_label,
                                     "source": f"Table on Page {page_num + 1}",
@@ -155,7 +185,7 @@ class DocumentProcessor:
                         images_data.append(
                             {
                                 "type": "image",
-                                "content": ocr_text,
+                                "content": _clean_text(ocr_text),
                                 "page": page_num + 1,
                                 "section": "image",
                                 "image_path": image_filename,

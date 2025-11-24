@@ -259,6 +259,8 @@ class VectorStore:
 
         - If the chunk contains numeric forecasts or projections -> +0.25
         - If it contains phrases like 'real GDP growth is projected' -> +0.4
+        - Boost chunks mentioning key macro terms (GDP, growth, fiscal,
+          inflation, projection) to increase recall for core policy topics.
         """
         text = (chunk.get("content") or "").lower()
         q_lower = query.lower()
@@ -278,6 +280,11 @@ class VectorStore:
             and ("projected" in text or "forecast" in text or "projection" in text)
         ):
             boost += 0.4
+
+        # Generic macro-policy focus terms inside the chunk
+        macro_terms = ["gdp", "growth", "fiscal", "inflation", "projection"]
+        if any(term in text for term in macro_terms):
+            boost += 0.2
 
         # Small extra tie-breaker when both query and chunk mention key GDP/forecast terms
         query_keywords = ["growth", "gdp", "forecast", "projection", "2024", "2025"]

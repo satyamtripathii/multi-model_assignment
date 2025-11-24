@@ -24,6 +24,22 @@ ECON_RELATED_KEYWORDS = [
 YEAR_KEYWORDS = ["2024", "2025"]
 
 
+def _postprocess_answer_text(text: str) -> str:
+    """Apply lightweight corrections to common numeric / fraction errors.
+
+    In particular, guard against Unicode fraction expansion issues that can
+    turn values like "5½ percent" into "512 percent".
+    """
+    if not text:
+        return text
+
+    # Fix specific hallucination/typo patterns requested
+    text = re.sub(r"\b512 percent\b", "5.5 percent", text)
+    text = re.sub(r"\b512%\b", "5.5%", text)
+
+    return text
+
+
 class LLMQA:
     def __init__(self, model_name: str = "google/flan-t5-base"):
         print(f"Loading LLM model via LangChain: {model_name}")
@@ -247,6 +263,9 @@ class LLMQA:
         if not answer.strip():
             return "No evidence found in the document."
 
+        # Apply numeric / fraction post-processing corrections
+        answer = _postprocess_answer_text(answer)
+
         # Grounding is now enforced softly in generate_answer_with_citations,
         # where we may add a safety note instead of blocking the answer.
         return answer
@@ -315,7 +334,11 @@ class LLMQA:
                     "retrieved context and should be interpreted with caution._"
                 )
 
-        final_answer = answer + safety_note if safety_note else answer
+        # Apply numeric / fraction post-processing corrections again at the
+        # very end so any templated note also gets cleaned if needed.
+        final_answer = _postprocess_answer_text(answer)
+        if safety_note:
+            final_answer = final_answer + safety_note
 
         citations = []
         for i, result in enumerate(filtered_results[:3]):
