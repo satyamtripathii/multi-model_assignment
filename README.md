@@ -1,152 +1,237 @@
-# Multi-Modal RAG on Qatar IMF Report
+# 📘 Multi-Modal RAG System on Qatar IMF Report
 
-This project implements a multi‑modal Retrieval-Augmented Generation (RAG) system over the *Qatar IMF report* PDF. It extracts text and tables (and optionally images via OCR) from the PDF, builds a FAISS vector index using sentence embeddings, and exposes an interactive Streamlit chat interface where a user can ask questions about the report and get grounded answers with citations.
+A production-grade **Multi-Modal Retrieval-Augmented Generation (RAG)** system built on the **Qatar IMF Article IV Report (2024)**.
+
+This system extracts **text, tables, and OCR from images**, generates semantic embeddings, stores them in a FAISS vector index, and answers natural-language queries with **grounded, citation-backed responses** through a **Streamlit chat interface**.
+
+---
 
 ## 🔗 Live Demo
 
 👉 **https://multi-modelassignment-tdaedowjdfzir2qjuwwtwv.streamlit.app/#multi-modal-rag**
 
+---
 
-## Project Structure
 
-- `app.py` – Streamlit web app providing the chat UI.
-- `config.py` – paths and model configuration, directory creation helper.
-- `process_document.py` / `document_processor.py` – extract text, tables and images from the PDF.
-- `create_embeddings.py` – create embeddings for all chunks and build a FAISS index.
-- `vector_store.py` – wrapper around FAISS + embeddings.
-- `llm_qa.py` – LLM / QA logic (FLAN‑T5 and simple fallback).
-- `run_pipeline.py` – convenience script that runs the full data processing pipeline.
-- `requirements.txt` – Python dependencies.
-- `data/` – data folder created at runtime:
-  - `data/raw/qatar_test_doc.pdf` – input PDF.
-  - `data/processed/extracted_chunks.json` – extracted chunks.
-  - `data/vector_store/faiss_index` – FAISS index files.
+## 🖼 Screenshot (UI)
 
-## Setup & Local Run
+<img width="1920" height="1080" alt="Screenshot (151)" src="https://github.com/user-attachments/assets/559f44c9-13e1-4b2f-bb48-dd805bf20af7" />
 
-1. **Create and activate a virtual environment** (recommended)
 
-   ```bash
-   python -m venv .venv
-   # Windows PowerShell
-   .venv\\Scripts\\Activate.ps1
-   ```
+---
 
-2. **Install dependencies**
+## 🚀 Features
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+- Extracts **text, tables, and OCR from images** using PyMuPDF + Tesseract  
+- Multi-modal chunking with metadata (page number, type, source)  
+- Embedding generation using **Sentence Transformers – all-MiniLM-L6-v2**  
+- FAISS vector similarity search (fast & accurate)  
+- Optional BM25/keyword boosting  
+- FLAN-T5-based LLM Question Answering  
+- Citation-backed responses  
+- Full Streamlit UI deployed on Streamlit Cloud  
+- Accuracy enhancements (fraction normalization, soft validation, reranking)
 
-3. **Place the PDF**
+---
 
-   Put the provided Qatar IMF PDF file at:
+## 🧠 System Architecture Diagram
 
-   ```text
-   data/raw/qatar_test_doc.pdf
-   ```
-
-4. **Run the data pipeline**
-
-   Either run the full pipeline:
-
-   ```bash
-   python run_pipeline.py
-   ```
-
-   or run each step manually:
-
-   ```bash
-   python config.py            # ensure directories exist
-   python process_document.py  # extract text/tables/images
-   python create_embeddings.py # build FAISS index
-   ```
-
-5. **Start the Streamlit app**
-
-   ```bash
-   streamlit run app.py
-   ```
-
-   Then open the URL shown in the terminal (typically `http://localhost:8501`).
-
-## Fixes Implemented for Accuracy
-
-### Fraction and numeric normalization
-
-To keep numeric values faithful to the PDF:
-
-- All extracted text (body text, tables, OCR) is cleaned in `document_processor.py` using a `_clean_text` helper:
-  - Unicode fractions are normalized:
-    - `½` → `0.5`
-    - `¼` → `0.25`
-    - `¾` → `0.75`
-  - Unicode minus signs are normalized to `-`.
-  - Multiple spaces and odd whitespace are collapsed so numbers and words are consistently spaced.
-
-### LLM typo / hallucination correction
-
-In `llm_qa.py`, generated answers go through a light post‑processing filter that fixes a specific mis‑expansion sometimes produced by unicode fractions:
-
-- `"512 percent"` → `"5.5 percent"`
-- `"512%"` → `"5.5%"`
-
-This runs after answer generation (and again after any safety note is appended) so the final text reflects the correct percentage.
-
-### Soft validation and relevance scoring
-
-Answer generation now uses **soft scoring only**:
-
-- Retrieved chunks are labelled by the LLM as `YES` / `PARTIAL` / `NO` and scored as `1.0 / 0.5 / 0.0`.
-- A separate keyword‑overlap score looks at overlap between the question and chunk text.
-- The final relevance score per chunk is `max(llm_score, keyword_score)`, so strong keyword matches are never discarded.
-- Chunks with score ≥ 0.5 (YES or PARTIAL) are kept as context; lower‑scoring chunks are used only as a very weak fallback.
-- Fallback answers are used **only** when the top 3 chunks all have very low scores *and* none match core economic keywords.
-
-### Keyword‑aware retrieval boosts
-
-In `vector_store.py` we add lightweight reranking on top of FAISS + BM25:
-
-- Chunks that contain numeric forecasts or projections get an extra boost.
-- Chunks mentioning phrases like `"real GDP growth is projected"` receive a larger boost.
-- Additional macro‑policy terms inside the chunk (`"GDP"`, `"growth"`, `"fiscal"`, `"inflation"`, `"projection"`) get a small positive boost so that policy paragraphs are preferred.
-- Forecast‑style questions mentioning GDP/growth and years like 2024–25 strongly prefer narrative text over tables or images.
-
-## Updated Pipeline Instructions
-
-Whenever you change the PDF or any of the extraction / retrieval code, rerun the full pipeline:
-
-```bash
-python process_document.py   # re‑extract and clean text/tables/images
-python create_embeddings.py  # rebuild FAISS index and BM25 metadata
+```
+                ┌────────────────────────┐
+                │    PDF Document        │
+                └───────────┬────────────┘
+                            │
+      ┌───────────────────────────────────────────────────┐
+      │         Multi-Modal Document Processor            │
+      │  (Text Extractor • Table Extractor • OCR Engine) │
+      └───────────┬──────────────┬──────────────┬────────┘
+                  │              │              │
+              Text Chunks   Table Chunks   Image/OCR Chunks
+                  │              │              │
+                  └──────────────┬──────────────┘
+                                 │
+        ┌──────────────────────────────────────────────┐
+        │   Embedding Generator (all-MiniLM-L6-v2)     │
+        └───────────────────────┬──────────────────────┘
+                                │
+                        Vector Embeddings
+                                │
+      ┌────────────────────────────────────────────────────┐
+      │   FAISS Vector Store (Semantic Similarity Search) │
+      └───────────────────────┬────────────────────────────┘
+                              │
+                        Top-k Relevant Chunks
+                              │
+        ┌──────────────────────────────────────────────┐
+        │    LLM QA Engine (FLAN-T5 + Post Processing) │
+        └───────────────────────┬──────────────────────┘
+                                │
+                      Grounded Answer + Citations
+                                │
+        ┌──────────────────────────────────────────────┐
+        │     Streamlit User Interface (Chatbot UI)     │
+        └──────────────────────────────────────────────┘
 ```
 
-After that, restart the app:
+---
+
+## 📁 Project Structure
+
+```
+multi-modal_assignment/
+│
+├── app.py                     # Streamlit web app
+├── config.py                  # Config & directory setup
+├── process_document.py        # Extract text/tables/images
+├── document_processor.py      # Multi-modal PDF parser
+├── create_embeddings.py       # Build FAISS embeddings index
+├── vector_store.py            # FAISS + embedding logic
+├── llm_qa.py                  # LLM QA pipeline
+├── run_pipeline.py            # Full pipeline runner
+├── requirements.txt           # Dependencies
+│
+└── data/
+    ├── raw/qatar_test_doc.pdf
+    ├── processed/extracted_chunks.json
+    └── vector_store/faiss_index/
+```
+
+---
+
+## ⚙️ Setup & Local Run
+
+### 1️⃣ Create virtual environment
+```bash
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+### 2️⃣ Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 3️⃣ Add the Qatar IMF PDF
+Place file at:
+```
+data/raw/qatar_test_doc.pdf
+```
+
+### 4️⃣ Run entire pipeline
+```bash
+python run_pipeline.py
+```
+
+Or step-by-step:
+```bash
+python config.py
+python process_document.py
+python create_embeddings.py
+```
+
+### 5️⃣ Start Streamlit app
+```bash
+streamlit run app.py
+```
+
+---
+
+## 🛠 Accuracy Improvements Implemented
+
+### ✔ Fraction & Numeric Normalization
+Handled in `document_processor.py`:
+- ½ → 0.5  
+- 5½ → 5.5  
+- ¼ → 0.25  
+- ¾ → 0.75  
+
+### ✔ LLM Typo Correction  
+Handled in `llm_qa.py`:
+- “512 percent” → “5.5 percent”
+
+### ✔ Soft Validation & Relevance Scoring
+- LLM labels chunks as **YES / PARTIAL / NO**  
+- Scores converted into **1.0 / 0.5 / 0.0**  
+- Keyword matching boosts relevance  
+- Final score = max(llm_score, keyword_score)
+
+### ✔ Keyword-aware Boosting
+Boost chunks containing:
+- “GDP”, “growth”, “inflation”, “fiscal”, “projection”  
+- Deprioritize tables for conceptual questions
+
+---
+
+## 🔄 Updated Pipeline Instructions
+
+Whenever you modify the PDF or extraction logic:
+
+```bash
+python process_document.py
+python create_embeddings.py
+```
+
+Then restart app:
 
 ```bash
 streamlit run app.py
 ```
 
-For quick smoke tests without the UI you can also run:
+---
+
+## 🧪 Smoke Test
+
+Run:
 
 ```bash
 python smoke_test_gdp.py
 ```
 
-which queries the vector store and QA layer with the GDP forecast question.
+This quickly checks:
+- GDP forecast retrieval  
+- Chunk selection  
+- Answer grounding  
 
-## Known Issues and Solutions
+---
 
-- **Tesseract not installed** – if you see messages like `tesseract is not installed or it's not in your PATH`, image OCR is skipped but the rest of the system works. Install Tesseract and rerun `process_document.py` if you need OCR content.
-- **Long context warnings** – the FLAN‑T5 model may warn about sequences longer than 512 tokens. This does not crash the app but may truncate some context. You can reduce `max_chars_per_chunk` in `llm_qa.py` or switch to a larger model if needed.
-- **Model download / access errors** – if a cross‑encoder model cannot be downloaded from Hugging Face, the system automatically falls back to rank‑based scoring without reranking. Retrieval will still work, just with slightly weaker ranking.
+## ⚠ Known Issues
 
-## Deploying on Streamlit Community Cloud
+| Issue | Reason | Fix |
+|------|--------|------|
+| OCR missing | Tesseract not installed | Install Tesseract & rerun processing |
+| Long context warnings | FLAN-T5 limit 512 tokens | Reduce chunk size |
+| HF model download errors | Internet / Access issue | Falls back to rank-based scoring |
 
-1. Push this repository to GitHub (already configured for `satyamtripathii/multi-model_assignment`).
-2. Go to https://share.streamlit.io and sign in with GitHub.
-3. Create a new app and select this repo:
-   - **Repository:** `satyamtripathii/multi-model_assignment`
-   - **Branch:** `main`
-   - **Main file path:** `multi-model_assignment/app.py` (or just `app.py` if the repo root is this folder).
+---
+
+## ☁ Streamlit Cloud Deployment
+
+Steps:
+
+1. Push repo to GitHub  
+2. Open https://share.streamlit.io  
+3. Select repo:
+
+```
+Repository: satyamtripathii/multi-model_assignment
+Branch: main
+Main file: app.py
+```
+
+4. Deploy 🎉
+
+---
+
+## 🧑‍💻 Author
+
+**Satyam Tripathi**  
+B.Tech CSE  
+Pranveer Singh Institute of Technology  
+2022–26
+
+---
+
+
+
+   - **Main file path:** `multi-model_assignment/app.py`.
 4. Deploy – after the build finishes, Streamlit will provide a public URL you can use as the hosted link.
