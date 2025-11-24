@@ -68,11 +68,10 @@ pip-selfcheck.json
 # mypy
 .mypy_cache/
 
-# data
-data/
-
-# FAISS index
-data/vector_store/faiss_index/
+# NOTE: For deployment, we *do* commit processed data and vector store
+# outputs so that the Streamlit app can load them without re-running
+# the pipeline. If you want to ignore large raw data in the future,
+# tighten these patterns instead of ignoring the whole `data/` folder.
 
 # Pyre
 .pyre/
