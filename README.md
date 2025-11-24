@@ -206,28 +206,29 @@ This quickly checks:
 
 ## ☁ Streamlit Cloud Deployment
 
-Steps:
+### **Steps to Deploy:**
 
-1. Push repo to GitHub  
-2. Open https://share.streamlit.io  
-3. Select repo:
+1. Push the repository to GitHub  
+2. Open: https://share.streamlit.io  
+3. Select your repository:
 
 ```
 Repository: satyamtripathii/multi-model_assignment
 Branch: main
-Main file: app.py
+Main file path: multi-model_assignment/app.py
 ```
 
-4. Deploy 🎉
+4. Click **Deploy** 🎉  
+5. After the build completes, Streamlit will automatically generate a **public hosted URL** that you can use as your hosted link.
 
 ---
 
 ## 🧑‍💻 Author
 
 **Satyam Tripathi**  
-B.Tech CSE  
-Pranveer Singh Institute of Technology  
-2022–26
+B.Tech CSE   
+Academic Year: 2022–26
+
 
 ---
 
