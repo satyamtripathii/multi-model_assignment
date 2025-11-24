@@ -2,6 +2,11 @@
 
 This project implements a multi‑modal Retrieval-Augmented Generation (RAG) system over the *Qatar IMF report* PDF. It extracts text and tables (and optionally images via OCR) from the PDF, builds a FAISS vector index using sentence embeddings, and exposes an interactive Streamlit chat interface where a user can ask questions about the report and get grounded answers with citations.
 
+## 🔗 Live Demo
+
+👉 **https://multi-modelassignment-tdaedowjdfzir2qjuwwtwv.streamlit.app/#multi-modal-rag**
+
+
 ## Project Structure
 
 - `app.py` – Streamlit web app providing the chat UI.
